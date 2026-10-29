@@ -75,6 +75,7 @@ internal object LauncherBubble {
     /** Shows the bubble shortly, because a DiPlay screen is going away. Main thread. */
     fun scheduleShow() {
         main.removeCallbacks(showIfBackground)
+        if (DiPlayLauncherIntegration.embedded) return
         main.postDelayed(showIfBackground, SHOW_DELAY_MILLIS)
     }
 
@@ -88,6 +89,7 @@ internal object LauncherBubble {
 
     /** Adds the bubble; false when it is switched off or the permission is missing. Main thread. */
     fun show(): Boolean {
+        if (DiPlayLauncherIntegration.embedded) { hide(); return false }
         if (root != null) return true
         // The bubble belongs on the launcher's screen, never over DiPlay's own screens.
         if (diPlayInFront()) return false

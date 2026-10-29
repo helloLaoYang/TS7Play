@@ -6,6 +6,7 @@ import android.os.Looper
 import android.view.Surface
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.Before
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RuntimeEnvironment
@@ -21,6 +22,7 @@ import com.shilapi.xcertplay.DiPlayLauncherIntegration
 @Config(sdk = [25, 36])
 @LooperMode(LooperMode.Mode.PAUSED)
 class SessionServiceTest {
+    @Before fun legacyFixture() { LauncherStore(RuntimeEnvironment.getApplication()).diPlayMode = false }
     @Test fun failedCleanupRejectsHandoffAndKeepsTheReceiverReserved() {
         val controller = Robolectric.buildService(Ts7SessionService::class.java).create()
         val service = controller.get()

@@ -103,7 +103,7 @@ class Ts7SessionService : Service() {
                 Intent.ACTION_SCREEN_ON -> if (screenWasOff) {
                     screenWasOff = false
                     diagnostics.record(Event.SCREEN_WAKE)
-                    if (store.resumeConnect && store.autoConnect && !policy.editing && !policy.active) {
+                    if (store.resumeConnect && (store.autoConnect || DiPlayLauncherIntegration.autoConnect(this@Ts7SessionService)) && !policy.editing && !policy.active) {
                         store.newStartup()
                         automaticStart()
                     }
@@ -502,6 +502,7 @@ class Ts7SessionService : Service() {
         borrowedProjection?.releaseTouches()
     }
     internal fun report() = diagnostics.report(state)
+    internal fun localNetworkReady() = networkSignature.isNotEmpty()
 
     private fun currentNetworkSignature(): String = connectivity.allNetworks.mapNotNull { network ->
         val capabilities = connectivity.getNetworkCapabilities(network) ?: return@mapNotNull null
@@ -518,6 +519,10 @@ class Ts7SessionService : Service() {
         if (next == networkSignature) return
         networkSignature = next
         diagnostics.record(Event.NETWORK_CHANGED)
+        if (store.diPlayMode) {
+            observers.toList().forEach { it(state) }
+            return
+        }
         if (policy.active) fail(R.string.ts7_failure_network, true, Event.NETWORK_CHANGED)
         if (next.isEmpty() && policy.desired) {
             diagnostics.record(Event.WAITING_NETWORK)

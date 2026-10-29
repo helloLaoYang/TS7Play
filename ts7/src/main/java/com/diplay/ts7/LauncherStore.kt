@@ -33,6 +33,23 @@ internal class LauncherStore(private val context: Context) {
     var diPlayMode: Boolean
         get() = prefs.getBoolean("diplay_mode", false)
         set(value) { prefs.edit().putBoolean("diplay_mode", value).apply() }
+    var floatingPosition: Float
+        get() = prefs.getFloat("floating_position", 0.55f).coerceIn(0f, 1f)
+        set(value) { prefs.edit().putFloat("floating_position", value.coerceIn(0f, 1f)).apply() }
+    var guideSeen: Boolean
+        get() = prefs.getBoolean("guide_seen", false)
+        set(value) { prefs.edit().putBoolean("guide_seen", value).apply() }
+    var guideStep: Int
+        get() = prefs.getInt("guide_step", 0).coerceIn(0, 5)
+        set(value) { prefs.edit().putInt("guide_step", value.coerceIn(0, 5)).apply() }
+    fun stepResult(step: Int): String = prefs.getString("guide_result_$step", "pending").orEmpty()
+    fun saveStepResult(step: Int, result: String) {
+        require(step in 0..4 && result in setOf("pending", "done", "skipped"))
+        prefs.edit().putString("guide_result_$step", result).apply()
+    }
+    var bootObserved: Boolean
+        get() = prefs.getBoolean("boot_observed", false)
+        set(value) { prefs.edit().putBoolean("boot_observed", value).apply() }
     var microphone: Boolean
         get() = prefs.getBoolean("microphone", true)
         set(value) { prefs.edit().putBoolean("microphone", value).apply() }

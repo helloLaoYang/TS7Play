@@ -7,11 +7,11 @@ DiPlay commit `615b32ce0b40cd0b99ce94ba23a512001553684f`.
 - Application module: `:ts7`.
 - Application ID: `com.hilllaoya.ts7play`.
 - Minimum Android version: 7.1 (API 25).
-- Version 0.2.0: Simplified Chinese by default, built-in DiPlay connection and
-  settings pages, a main-screen Surface, exclusive receiver handoff, local apps,
-  original-launcher recovery and diagnostic exports.
+- Version 0.3.0: system day/night appearance, a floating launcher, skippable
+  device setup, explicit USB and Wi-Fi controls, hotspot status and controlled
+  startup, and the built-in DiPlay operation and settings pages.
 
-[Current implementation and installation](docs/TS7_0.2.0.md) ·
+[Current implementation and installation](docs/TS7_0.3.0.md) ·
 [Initial validation and device checklist](docs/TS7_VALIDATION.md) ·
 [Download the source-only test APK](https://ai.lipeachr.com/diplay/TS7Play.apk)
 

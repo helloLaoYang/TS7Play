@@ -38,6 +38,7 @@ internal fun shouldDeferAppearanceRender(windowKeyLearning: Boolean, serviceKeyL
     windowKeyLearning || serviceKeyLearning
 
 internal fun Context.resolveAppNightNow(hostNight: Boolean? = AppAppearanceRuntime.hostNight()): Boolean {
+    if (DiPlayLauncherIntegration.embedded) return DiPlayLauncherIntegration.systemNight(this)
     val now = Calendar.getInstance()
     return resolveAppNight(
         appearance = AirPlayPersistence.loadAppAppearance(this),

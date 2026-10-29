@@ -24,7 +24,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.LooperMode
-import org.robolectric.shadows.ShadowAlertDialog
+import org.robolectric.shadows.ShadowDialog
 import org.robolectric.android.controller.ServiceController
 import java.io.File
 import com.shilapi.xcertplay.media.CarPlayTouchMapper
@@ -39,6 +39,7 @@ class LauncherTest {
 
     @Before fun bindRealIdleService() {
         val app = RuntimeEnvironment.getApplication()
+        LauncherStore(app).guideSeen = true
         serviceController = Robolectric.buildService(Ts7SessionService::class.java).create()
         shadowOf(app).setComponentNameAndServiceForBindService(
             ComponentName(app, Ts7SessionService::class.java), serviceController.get().onBind(Intent()))
@@ -47,17 +48,18 @@ class LauncherTest {
 
     @After fun destroyService() { serviceController.destroy() }
 
-    @Test fun chineseDiPlayEntryStartsTheBundledActivity() {
+    @Test fun bothTransportButtonsTargetTheBundledDiPlayActivity() {
         val controller = Robolectric.buildActivity(LauncherActivity::class.java).setup()
         try {
             val activity = controller.get()
             assertEquals("应用", activity.getString(R.string.ts7_apps))
             assertEquals("连接", activity.getString(R.string.ts7_connect))
-            text(activity.window.decorView, activity.getString(R.string.ts7_diplay)).performClick()
+            text(activity.window.decorView, activity.getString(R.string.ts7_usb_connection)).performClick()
             val intent = shadowOf(activity).nextStartedActivity
             assertEquals(ComponentName(activity, DiPlayActivity::class.java), intent.component)
-            assertEquals(Intent.ACTION_MAIN, intent.action)
-            assertTrue(intent.hasCategory(Intent.CATEGORY_LAUNCHER))
+            assertEquals("WIRED", intent.getStringExtra("com.hilllaoya.ts7play.CONNECTION_TRANSPORT"))
+            text(activity.window.decorView, activity.getString(R.string.ts7_wifi_connection)).performClick()
+            assertEquals("WIRELESS", shadowOf(activity).nextStartedActivity.getStringExtra("com.hilllaoya.ts7play.CONNECTION_TRANSPORT"))
             assertTrue(LauncherStore(activity).diPlayMode)
         } finally { controller.pause().stop().destroy() }
     }
@@ -86,8 +88,13 @@ class LauncherTest {
             activity.onBackPressed()
             assertFalse(activity.isFinishing)
             assertNull(shadowOf(activity).nextStartedService)
-            assertNotNull(text(activity.window.decorView, activity.getString(R.string.ts7_original_home)))
-            assertNotNull(text(activity.window.decorView, activity.getString(R.string.ts7_system_settings)))
+            val ball = activity.window.decorView.findViewWithTag<View>(FloatingLauncher.TAG_ENTRY)
+            assertNotNull(ball)
+            ball.performClick()
+            val menu = ShadowDialog.getLatestDialog()
+            assertNotNull(text(menu.window!!.decorView, activity.getString(R.string.ts7_original_home)))
+            assertNotNull(text(menu.window!!.decorView, activity.getString(R.string.ts7_system_settings)))
+            menu.dismiss()
         } finally { controller.pause().stop().destroy() }
     }
 
@@ -142,17 +149,25 @@ class LauncherTest {
         assertTrue(report.contains("api=${Build.VERSION.SDK_INT}"))
     }
 
-    @Test fun canDisableAutomaticConnectionWithoutValidNetworkConfiguration() {
+    @Test fun canSkipEveryGuideStepWithoutChangingSystemOrStartupSettings() {
         val controller = Robolectric.buildActivity(LauncherActivity::class.java).setup()
         try {
             val activity = controller.get()
-            text(activity.window.decorView, activity.getString(R.string.ts7_settings)).performClick()
+            val wasDefaultHome = DeviceProfile.isDefaultHome(activity)
+            activity.showPage(LauncherNavigation.GUIDE)
             shadowOf(Looper.getMainLooper()).idle()
-            val dialog = ShadowAlertDialog.getLatestAlertDialog()
-            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick()
+            val dialog = ShadowDialog.getLatestDialog()
+            repeat(5) { text(dialog.window!!.decorView, activity.getString(R.string.ts7_skip_step)).performClick() }
+            val alreadyComplete = if (wasDefaultHome) 1 else 0
+            assertTrue(text(dialog.window!!.decorView, activity.getString(R.string.ts7_guide_summary, alreadyComplete, 5 - alreadyComplete)).isShown)
+            assertEquals(wasDefaultHome, DeviceProfile.isDefaultHome(activity))
+            text(dialog.window!!.decorView, activity.getString(R.string.ts7_enter_home)).performClick()
             shadowOf(Looper.getMainLooper()).idle()
             assertFalse(dialog.isShowing)
             assertFalse(LauncherStore(activity).autoConnect)
+            assertFalse(DiPlayLauncherIntegration.autoConnect(activity))
+            assertFalse(LauncherStore(activity).resumeConnect)
+            assertNull(shadowOf(activity).nextStartedActivity)
         } finally { controller.pause().stop().destroy() }
     }
 
@@ -160,9 +175,8 @@ class LauncherTest {
         val controller = Robolectric.buildActivity(LauncherActivity::class.java).setup()
         try {
             val activity = controller.get()
-            text(activity.window.decorView, activity.getString(R.string.ts7_settings)).performClick()
-            val dialog = ShadowAlertDialog.getLatestAlertDialog()
-            text(dialog.window!!.decorView, activity.getString(R.string.ts7_export_report)).performClick()
+            activity.showPage(LauncherNavigation.SETTINGS)
+            clickText(activity.window.decorView, activity.getString(R.string.ts7_export_report))
             val request = shadowOf(activity).nextStartedActivityForResult
             assertEquals(Intent.ACTION_CREATE_DOCUMENT, request.intent.action)
             assertEquals("text/plain", request.intent.type)
@@ -171,24 +185,40 @@ class LauncherTest {
     }
 
     @Test @Config(sdk = [35]) @GraphicsMode(GraphicsMode.Mode.NATIVE)
-    fun renderCompactAndFullWithLargeText() {
-        RuntimeEnvironment.setFontScale(1.3f)
-        for ((name, width, height) in listOf(Triple("compact", 800, 480), Triple("full", 1280, 720), Triple("rtl", 1280, 720))) {
+    fun renderSystemThemesLaunchpadAndSkippableGuide() {
+        for ((name, width, height) in listOf(Triple("compact-day", 800, 480), Triple("full-dark", 1280, 720),
+            Triple("compact-large", 800, 480), Triple("rtl", 1280, 720))) {
+            RuntimeEnvironment.setFontScale(if (name == "compact-large") 1.3f else 1f)
             val locale = if (name == "rtl") "ar-rSA-ldrtl-" else "zh-rCN-"
-            RuntimeEnvironment.setQualifiers("${locale}w${width}dp-h${height}dp-land-mdpi")
+            val night = if (name == "full-dark") "night" else "notnight"
+            RuntimeEnvironment.setQualifiers("${locale}w${width}dp-h${height}dp-land-$night-mdpi")
             val controller = Robolectric.buildActivity(LauncherActivity::class.java).setup().visible()
             try {
                 val activity = controller.get()
                 val direction = if (name == "rtl") View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
                 activity.window.decorView.layoutDirection = direction
                 capture(activity.window.decorView, width, height, "$name-home")
-                text(activity.window.decorView, activity.getString(R.string.ts7_settings)).performClick()
-                val dialogView = ShadowAlertDialog.getLatestAlertDialog().window!!.decorView
+                activity.window.decorView.findViewWithTag<View>(FloatingLauncher.TAG_ENTRY).performClick()
+                val menu = ShadowDialog.getLatestDialog()
+                val dialogView = menu.window!!.decorView
                 dialogView.layoutDirection = direction
-                capture(dialogView, width, height, "$name-settings")
+                capture(dialogView, minOf(width - 48, 800), minOf(height - 48, 340), "$name-launchpad")
+                menu.dismiss()
+                activity.showPage(LauncherNavigation.SETTINGS)
+                capture(activity.window.decorView, width, height, "$name-settings")
+                if (name == "compact-day") {
+                    activity.showPage(LauncherNavigation.GUIDE)
+                    val guide = ShadowDialog.getLatestDialog()
+                    repeat(6) { step ->
+                        capture(guide.window!!.decorView, width - 48, height - 48, "guide-$step")
+                        if (step < 5) text(guide.window!!.decorView, activity.getString(R.string.ts7_skip_step)).performClick()
+                    }
+                    guide.dismiss()
+                }
             } finally { controller.pause().stop().destroy() }
         }
         RuntimeEnvironment.setQualifiers("zh-rCN-w1280dp-h720dp-land-mdpi")
+        RuntimeEnvironment.setFontScale(1f)
         val context = RuntimeEnvironment.getApplication()
         DiPlayLauncherIntegration.importDesktopConnection(context, "", "", null, true)
         val diPlay = Robolectric.buildActivity(DiPlayActivity::class.java,
@@ -214,6 +244,11 @@ class LauncherTest {
 
     private fun text(root: View, value: String): TextView =
         descendants(root).filterIsInstance<TextView>().first { it.text.toString() == value }
+    private fun clickText(root: View, value: String) {
+        var target: View? = text(root, value)
+        while (target != null && !target.isClickable) target = target.parent as? View
+        assertTrue(requireNotNull(target).performClick())
+    }
     private fun descendants(root: View): Sequence<View> = sequence {
         yield(root)
         if (root is ViewGroup) for (index in 0 until root.childCount) yieldAll(descendants(root.getChildAt(index)))

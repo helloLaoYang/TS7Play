@@ -1,0 +1,28 @@
+[
+  {
+    "name": "DiPlay",
+    "version": "0.2.22",
+    "size": 19042758,
+    "sha": "7d04db263834f22010a86847766928113d3503a273e4d2d3440d21552e173139",
+    "filename": "DiPlay-0.2.22.apk",
+    "href": "/diplay/DiPlay-0.2.22.apk",
+    "source": "/diplay/DiPlay-0.2.22-source.zip",
+    "badge": "Upstream public preview",
+    "desc": "Original DiPlay release for compatible Android head units. Includes the upstream USB and wireless CarPlay workflows.",
+    "note": "Compatibility depends on the head unit and iPhone. See the upstream release notes.",
+    "repo": "https://github.com/shihabal3amri/DiPlay/releases/tag/v0.2.22"
+  },
+  {
+    "name": "TS7Play",
+    "version": "0.3.0",
+    "size": 27696439,
+    "sha": "656c834d609234c50565fcc79ea482f0f614b7a946851290a2cc8d6fc79ba97c",
+    "filename": "TS7Play.apk",
+    "href": "/diplay/TS7Play.apk",
+    "source": "/diplay/TS7Play-0.3.0-source.zip",
+    "badge": "Source-only test build",
+    "desc": "TS7 Android launcher with DiPlay built into the same APK. Application ID: com.hilllaoya.ts7play.",
+    "note": "No runtime CarPlay authentication is bundled. Standalone iPhone connection requires valid authentication; hardware acceptance is still pending.",
+    "repo": "https://github.com/helloLaoYang/TS7Play"
+  }
+]

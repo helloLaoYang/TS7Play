@@ -11,6 +11,8 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import com.shilapi.xcertplay.media.AndroidMediaSink
 import com.shilapi.xcertplay.orchestration.CarPlayController
+import com.shilapi.xcertplay.orchestration.CarPlayTransport
+import com.shilapi.xcertplay.orchestration.WirelessHotspotMode
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [25])
@@ -19,6 +21,8 @@ class DiPlayLauncherIntegrationTest {
     @After fun clear() {
         DiPlayLauncherIntegration.releaseDesktop(owner)
         CarPlayBackgroundSession.clear()
+        org.robolectric.util.ReflectionHelpers.setStaticField(DiPlayLauncherIntegration::class.java, "embedded", false)
+        DiPlayLauncherIntegration.onManualDisconnect = null
     }
 
     @Test fun desktopReservationCannotBeStolenOrReleasedByAnotherOwner() {
@@ -71,6 +75,25 @@ class DiPlayLauncherIntegrationTest {
         AirPlayPersistence.saveExistingWifiCredentials(context, "Edited LAN", "another-test-password")
         DiPlayLauncherIntegration.importDesktopConnection(context, "First LAN", "test-only-password", null, false)
         assertEquals("Edited LAN", AirPlayPersistence.loadExistingWifiSsid(context))
+    }
+
+    @Test fun explicitTransportRequestsAreConsumedOnceAndUseTheSameHost() {
+        val context = RuntimeEnvironment.getApplication()
+        DiPlayLauncherIntegration.initialize(context)
+        for (transport in CarPlayTransport.entries) {
+            val intent = DiPlayLauncherIntegration.connectionIntent(context, transport)
+            assertEquals(DiPlayActivity::class.java.name, intent.component!!.className)
+            assertEquals(transport, DiPlayLauncherIntegration.consumeConnectionRequest(intent))
+            assertNull(DiPlayLauncherIntegration.consumeConnectionRequest(intent))
+        }
+    }
+
+    @Test fun migrationPreservesAnExistingCarHotspotChoice() {
+        val context = RuntimeEnvironment.getApplication()
+        AirPlayPersistence.saveWirelessHotspotMode(context, WirelessHotspotMode.MANUAL)
+        DiPlayLauncherIntegration.importDesktopConnection(context, "Old LAN", "test-only-password", null, true)
+        assertEquals(WirelessHotspotMode.MANUAL, AirPlayPersistence.loadWirelessHotspotMode(context))
+        assertEquals("", AirPlayPersistence.loadExistingWifiSsid(context))
     }
 
     private fun storeSession(rotation: Int = 0) {

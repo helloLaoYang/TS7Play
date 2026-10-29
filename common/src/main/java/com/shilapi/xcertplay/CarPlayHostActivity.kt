@@ -2018,6 +2018,7 @@ open class CarPlayHostActivity : ComponentActivity() {
 
     private fun buildContentView(): View {
         val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+        if (DiPlayLauncherIntegration.embedded) root.setPadding(dp(DiPlayLauncherIntegration.EDGE_GUTTER_DP), 0, 0, 0)
         val video = TextureView(this).apply {
             isOpaque = false
             surfaceTextureListener = textureListener

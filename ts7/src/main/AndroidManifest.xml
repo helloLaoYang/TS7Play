@@ -26,12 +26,8 @@
             android:exported="false" tools:replace="android:exported">
             <intent-filter tools:node="removeAll" />
         </activity>
-        <receiver android:name="com.shilapi.xcertplay.PhoneBluetoothReceiver"
-            android:enabled="true" android:exported="true">
-            <intent-filter>
-                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
-            </intent-filter>
-        </receiver>
+        <receiver android:name="com.shilapi.xcertplay.BootReceiver"
+            android:enabled="false" tools:replace="android:enabled" />
         <activity android:name=".LauncherActivity" android:exported="true"
             android:launchMode="singleTask" android:screenOrientation="landscape"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|uiMode">

@@ -393,6 +393,9 @@ object AirPlayPersistence {
             .apply()
     }
 
+    fun hasSavedWirelessMode(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).contains(KEY_WIRELESS_HOTSPOT_MODE)
+
     fun loadWirelessHotspotMode(context: Context): WirelessHotspotMode {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val stored = prefs.getString(KEY_WIRELESS_HOTSPOT_MODE, null)

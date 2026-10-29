@@ -193,6 +193,7 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
     private var pendingCarHotspotSetup = false
     private var hotspotJoinControls: HotspotJoinControls? = null
     private var setupError: String? = null
+    private var pendingLauncherConnection: com.shilapi.xcertplay.orchestration.CarPlayTransport? = null
     private var status: TextView? = null
     private var homeCardTitle: TextView? = null
     private var homeConnectionHint: TextView? = null
@@ -375,6 +376,9 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val launcherConnection = DiPlayLauncherIntegration.consumeConnectionRequest(intent).takeIf { savedInstanceState == null }
+        pendingLauncherConnection = launcherConnection
+        launcherConnection?.let { AirPlayPersistence.saveWirelessEnabled(this, it == com.shilapi.xcertplay.orchestration.CarPlayTransport.WIRELESS) }
         // Back on the home page finishes this activity while the session runs on, so the icon lands here.
         if (savedInstanceState == null && isLauncherIntent(intent) && CarPlayBackgroundSession.hasSession()) {
             openProjection(); finish(); return
@@ -433,6 +437,9 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent); setIntent(intent)
+        val launcherConnection = DiPlayLauncherIntegration.consumeConnectionRequest(intent)
+        pendingLauncherConnection = launcherConnection
+        launcherConnection?.let { AirPlayPersistence.saveWirelessEnabled(this, it == com.shilapi.xcertplay.orchestration.CarPlayTransport.WIRELESS) }
         connectionSettingsReturnCategory = null
         // CarPlay runs in its own task, so the launcher icon resumes this one. Settings opened from
         // CarPlay carry a "page" extra, which isLauncherIntent rejects.
@@ -440,6 +447,7 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
             page = "home"; render(); openProjection(); return
         }
         page = requestedPage(intent) ?: "home"; render()
+        dispatchLauncherConnection()
         automaticVehicleValidationStarted = false
         scheduleAutomaticVehicleValidation()
         handleWirelessRecovery()
@@ -553,8 +561,10 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
                 handler.post { connect(DiPlayPreferences.autoConnectWireless(this)) }
             }
         }
+        handler.post { dispatchLauncherConnection() }
     }
     override fun onPause() {
+        pendingLauncherConnection = null
         appearanceUpdatesResumed = false
         appearanceObserverRemoval?.invoke()
         appearanceObserverRemoval = null
@@ -563,6 +573,17 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
         pausedForAdbSwitchChange = adbSwitchChangePending
         handler.removeCallbacks(tick)
         super.onPause()
+    }
+
+    private fun dispatchLauncherConnection() {
+        if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) return
+        val requested = pendingLauncherConnection ?: return
+        pendingLauncherConnection = null
+        handler.post {
+            if (!isFinishing && !isDestroyed && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                connect(requested == com.shilapi.xcertplay.orchestration.CarPlayTransport.WIRELESS)
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -741,6 +762,8 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
                 baseRight + safe.right, baseBottom + safe.bottom)
             insets
         }
+        if (DiPlayLauncherIntegration.embedded) root.setPadding(
+            root.paddingLeft + dp(DiPlayLauncherIntegration.EDGE_GUTTER_DP), root.paddingTop, root.paddingRight, root.paddingBottom)
         setContentView(root)
         ViewCompat.requestApplyInsets(root)
         renderedPage = page
@@ -922,6 +945,7 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
         requestAppearanceRender(focusAppearanceButton = true)
     }.apply {
         tag = APPEARANCE_BUTTON_TAG
+        if (DiPlayLauncherIntegration.embedded) visibility = View.GONE
     }
 
     private fun home(content: LinearLayout) {
@@ -979,6 +1003,7 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
         }
         card.addView(homeButton(getString(R.string.choose_iphone), false) { choosePhone() }, matchButton(if (compact) CONTROL_GAP_DP else 16, if (compact) 46 else 56))
         disconnectButton = homeButton(getString(R.string.disconnect), false) {
+            DiPlayLauncherIntegration.onManualDisconnect?.invoke()
             disconnectButton?.isEnabled = false
             CarPlayBackgroundSession.stop { runOnUiThread { refreshStatus() } }
         }.apply { visibility = View.GONE }
@@ -1778,6 +1803,7 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
         filteredSection(content, SettingsSection.AUTOMATIC_CONNECTION,
             getString(R.string.automatic_connection), R.drawable.ic_dp_automation) { card ->
             toggle(card, getString(R.string.connect_when_diplay_opens), getString(R.string.default_connection_description), DiPlayPreferences.autoConnect(this)) { DiPlayPreferences.saveAutoConnect(this, it) }
+            if (!DiPlayLauncherIntegration.embedded) {
             toggle(card, getString(R.string.connect_when_iphone_bluetooth_connects),
                 getString(R.string.connect_when_iphone_bluetooth_connects_description),
                 DiPlayPreferences.connectOnPhoneBluetooth(this)) { enabled ->
@@ -1787,6 +1813,7 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
                     bluetoothAutoConnectPermission.launch(Manifest.permission.BLUETOOTH_CONNECT)
                 } else if (enabled && DiPlayPreferences.phoneAddress(this) == null) choosePhone()
             }
+            }
             val connectionModes = DefaultConnectionMode.entries
             choice(card, getString(R.string.default_connection_mode), listOf(
                 getString(R.string.default_connection_last_used),
@@ -1795,6 +1822,7 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
             ), connectionModes.indexOf(DiPlayPreferences.defaultConnectionMode(this)), reconnects = false) {
                 DiPlayPreferences.saveDefaultConnectionMode(this, connectionModes[it])
             }
+            if (!DiPlayLauncherIntegration.embedded) {
             adbToggle(card, R.string.open_after_the_car_starts,
                 R.string.availability_depends_on_your_head_unit_s_startup_settings,
                 read = { AirPlayPersistence.loadAutoStartOnBoot(this) },
@@ -1802,6 +1830,7 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
                     AirPlayPersistence.loadWirelessHotspotMode(this) == WirelessHotspotMode.MANUAL },
                 permissions = { listOf(CarHotspotSetup.Permission.BOOT_LAUNCH) }) {
                 AirPlayPersistence.saveAutoStartOnBoot(this, it)
+            }
             }
             val autoConfirmActive = UsbPermissionSetup.Permission.ACCESSIBILITY.granted(this)
             toggle(
@@ -1851,6 +1880,7 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
         if (settingsSectionFilter?.contains(SettingsSection.BYD_ADB) != false) bydAdbSettings(content)
         filteredSection(content, SettingsSection.DISPLAY_AND_PERFORMANCE,
             getString(R.string.display_and_performance), R.drawable.ic_dp_display) { card ->
+            if (!DiPlayLauncherIntegration.embedded) {
             val appearances = AppAppearance.entries
             choice(
                 card,
@@ -1868,6 +1898,7 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
                 handler.post { checkForAppearanceChange() }
             }
             card.addView(label(getString(R.string.settings_app_appearance_description), 14, MUTED))
+            }
             val nightModes = CarPlayNightMode.entries
             val nightMode = AirPlayPersistence.loadCarPlayNightMode(this)
             val ambientControls = column().apply {
@@ -2134,6 +2165,7 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
         }
         // A launcher shortcut. Some head units' launchers list only their own cards, so a normally
         // installed app never appears on the home screen; this app draws its own way back instead (#650).
+        if (!DiPlayLauncherIntegration.embedded) {
         filteredSection(content, SettingsSection.LAUNCHER_BUBBLE,
             getString(R.string.settings_launcher_bubble), R.drawable.ic_dp_bubble) { card ->
             toggle(card, getString(R.string.settings_launcher_bubble),
@@ -2154,6 +2186,7 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
                 card.addView(label(if (overlay) getString(R.string.center_map_overlay_allowed)
                     else getString(R.string.center_map_overlay_missing, packageName), 14, if (overlay) MUTED else WARNING))
             }
+        }
         }
         // Cluster video does not require a BYD navigation broadcast receiver.
         filteredSection(content, SettingsSection.CLUSTER_MAP,
