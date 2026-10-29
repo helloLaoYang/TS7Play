@@ -1,4 +1,8 @@
-# TS7 CarPlay launcher
+# TS7 CarPlay launcher v0.1
+
+For the current Chinese interface and built-in DiPlay pages, see
+[version 0.2.0](TS7_0.2.0.md). This document preserves the initial implementation
+and its device-acceptance baseline.
 
 The `:ts7` application is a single-APK launcher and CarPlay receiver based on
 DiPlay commit `615b32ce0b40cd0b99ce94ba23a512001553684f` (upstream version 0.2.22).

@@ -15,11 +15,67 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
 import org.robolectric.util.ReflectionHelpers
 import java.time.Duration
+import com.shilapi.xcertplay.DiPlayLauncherIntegration
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [25, 36])
 @LooperMode(LooperMode.Mode.PAUSED)
 class SessionServiceTest {
+    @Test fun failedCleanupRejectsHandoffAndKeepsTheReceiverReserved() {
+        val controller = Robolectric.buildService(Ts7SessionService::class.java).create()
+        val service = controller.get()
+        try {
+            ReflectionHelpers.setField(service, "busy", true)
+            assertTrue(DiPlayLauncherIntegration.reserveDesktop(service))
+            val results = mutableListOf<Boolean>()
+            service.prepareDiPlay { results.add(it) }
+            service.javaClass.getDeclaredMethod("cleanupFinished", Boolean::class.javaPrimitiveType)
+                .apply { isAccessible = true }.invoke(service, false)
+            assertEquals(listOf(false), results)
+            assertFalse(DiPlayLauncherIntegration.reserveDesktop(Any()))
+        } finally {
+            controller.destroy()
+            // This fixture has no native receiver to retire.
+            DiPlayLauncherIntegration.releaseDesktop(service)
+        }
+    }
+
+    @Test fun handoffWaitsForReceiverTeardownAndDisablesLegacyAutoConnect() {
+        val controller = Robolectric.buildService(Ts7SessionService::class.java).create()
+        val service = controller.get()
+        try {
+            val store = LauncherStore(service).apply { autoConnect = true }
+            ReflectionHelpers.setField(service, "busy", true)
+            assertTrue(DiPlayLauncherIntegration.reserveDesktop(service))
+            val results = mutableListOf<Boolean>()
+            service.prepareDiPlay { results.add(it) }
+            assertTrue(results.isEmpty())
+            assertTrue(DiPlayLauncherIntegration.desktopReceiverBusy)
+            service.javaClass.getDeclaredMethod("cleanupFinished", Boolean::class.javaPrimitiveType)
+                .apply { isAccessible = true }.invoke(service, true)
+            assertEquals(listOf(true), results)
+            assertFalse(DiPlayLauncherIntegration.desktopReceiverBusy)
+            assertTrue(store.diPlayMode)
+            assertFalse(store.autoConnect)
+            service.connect()
+            assertFalse(service.report().contains("ATTEMPT_STARTED"))
+        } finally { controller.destroy() }
+    }
+
+    @Test fun cancelledHandoffCannotLaunchAPageAfterTheLauncherLeaves() {
+        val controller = Robolectric.buildService(Ts7SessionService::class.java).create()
+        val service = controller.get()
+        try {
+            ReflectionHelpers.setField(service, "busy", true)
+            var opened = false
+            service.prepareDiPlay { opened = true }
+            service.cancelDiPlayHandoff()
+            service.javaClass.getDeclaredMethod("cleanupFinished", Boolean::class.javaPrimitiveType)
+                .apply { isAccessible = true }.invoke(service, true)
+            assertFalse(opened)
+        } finally { controller.destroy() }
+    }
+
     @Test fun firstPictureDeadlineIsSuspendedWhileTheSurfaceIsDetached() {
         val controller = Robolectric.buildService(Ts7SessionService::class.java).create()
         val service = controller.get()
@@ -37,7 +93,7 @@ class SessionServiceTest {
             service.attachSurface(surface)
             shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(16))
             assertEquals(SessionPhase.FAILED, observed.phase)
-            assertEquals(R.string.failure_picture, observed.message)
+            assertEquals(R.string.ts7_failure_picture, observed.message)
         } finally {
             controller.destroy()
             surface.release()

@@ -34,8 +34,11 @@ import android.widget.TextClock
 import android.widget.TextView
 import android.widget.Toast
 import com.shilapi.xcertplay.orchestration.ManualHotspotValidation
+import com.shilapi.xcertplay.AppLocale
+import com.shilapi.xcertplay.DiPlayLauncherIntegration
 
 class LauncherActivity : Activity(), SurfaceHolder.Callback {
+    override fun attachBaseContext(newBase: Context) = super.attachBaseContext(AppLocale.wrap(newBase))
     private lateinit var store: LauncherStore
     private lateinit var panel: CarPlayPanel
     private lateinit var status: TextView
@@ -53,6 +56,7 @@ class LauncherActivity : Activity(), SurfaceHolder.Callback {
     private var state = SessionState()
     private var pendingReport: String? = null
     private var availableSurface: Surface? = null
+    private var languageAtCreate = AppLocale.SYSTEM
     private val observer: (SessionState) -> Unit = { render(it) }
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
@@ -65,12 +69,13 @@ class LauncherActivity : Activity(), SurfaceHolder.Callback {
         }
         override fun onServiceDisconnected(name: ComponentName) {
             service = null
-            render(SessionState(SessionPhase.FAILED, R.string.failure_start))
+            render(SessionState(SessionPhase.FAILED, R.string.ts7_failure_start))
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        languageAtCreate = AppLocale.preference(this)
         store = LauncherStore(this)
         // Capture the resolved original HOME before asking the user to change the default.
         if (store.originalHome == null) {
@@ -88,18 +93,17 @@ class LauncherActivity : Activity(), SurfaceHolder.Callback {
             setBackgroundColor(BACKGROUND)
         }
         rail = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        root.addView(ScrollView(this).apply { isFillViewport = true; addView(rail) },
-            LinearLayout.LayoutParams(dp(RAIL_WIDTH), -1).apply { marginEnd = dp(GAP) })
+        root.addView(rail, LinearLayout.LayoutParams(dp(RAIL_WIDTH), -1).apply { marginEnd = dp(GAP) })
         refreshRail()
         val main = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(main, LinearLayout.LayoutParams(0, -1, 1f))
         val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        header.addView(label(getString(R.string.app_name), 22f, ACCENT), LinearLayout.LayoutParams(0, dp(CONTROL_HEIGHT), 1f))
+        header.addView(label(getString(R.string.ts7_app_name), 22f, ACCENT), LinearLayout.LayoutParams(0, dp(CONTROL_HEIGHT), 1f))
         status = label("", 16f)
         header.addView(status, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(GAP) })
         main.addView(header)
         panel = CarPlayPanel(this)
-        panel.video.contentDescription = getString(R.string.app_name)
+        panel.video.contentDescription = getString(R.string.ts7_app_name)
         panel.video.holder.addCallback(this)
         panel.video.setOnTouchListener { _, event ->
             if (state.phase != SessionPhase.CONNECTED) return@setOnTouchListener false
@@ -121,17 +125,17 @@ class LauncherActivity : Activity(), SurfaceHolder.Callback {
         })
         local.addView(TextClock(this).apply {
             gravity = Gravity.CENTER; textSize = 18f; setTextColor(MUTED)
-            format24Hour = "EEEE, MMM d"; format12Hour = "EEEE, MMM d"
+            format24Hour = getString(R.string.ts7_date_format); format12Hour = getString(R.string.ts7_date_format)
         })
-        local.addView(label(getString(R.string.local_hint), 15f, MUTED).apply {
+        local.addView(label(getString(R.string.ts7_local_hint), 15f, MUTED).apply {
             gravity = Gravity.CENTER; setPadding(0, dp(GAP), 0, 0)
         })
         panel.addView(local, FrameLayout.LayoutParams(-1, -1))
         val footer = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         details = label("", 14f, MUTED)
         footer.addView(details, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(GAP) })
-        connectButton = button(R.string.connect) { service?.connect() }
-        disconnectButton = button(R.string.disconnect) { service?.disconnect() }
+        connectButton = button(R.string.ts7_connect) { openDiPlay() }
+        disconnectButton = button(R.string.ts7_disconnect) { service?.disconnect() }
         footer.addView(connectButton, LinearLayout.LayoutParams(dp(116), dp(CONTROL_HEIGHT)))
         footer.addView(disconnectButton, LinearLayout.LayoutParams(dp(116), dp(CONTROL_HEIGHT)).apply { marginStart = dp(GAP) })
         main.addView(footer, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(GAP) })
@@ -142,37 +146,40 @@ class LauncherActivity : Activity(), SurfaceHolder.Callback {
     private fun refreshRail() {
         rail.removeAllViews()
         rail.addView(label("TS7", 26f, ACCENT).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(-1, dp(CONTROL_HEIGHT)))
-        railButton(R.string.apps) { showApps() }
+        val quickApps = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        rail.addView(ScrollView(this).apply { addView(quickApps) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        railButton(R.string.ts7_diplay, quickApps) { openDiPlay() }
+        railButton(R.string.ts7_apps, quickApps) { showApps() }
         repeat(2) { slot ->
             val saved = store.shortcut(slot)?.let(ComponentName::unflattenFromString)
             val app = saved?.let { selected -> AppCatalog.list(this).firstOrNull { it.component == selected } }
-            val shortcut = button(app?.label ?: getString(R.string.shortcut_slot, slot + 1)) {
+            val shortcut = button(app?.label ?: getString(R.string.ts7_shortcut_slot, slot + 1)) {
                 if (saved != null) launch(saved) else chooseApp(slot = slot)
             }
             shortcut.setOnLongClickListener { chooseApp(slot = slot); true }
-            rail.addView(shortcut, LinearLayout.LayoutParams(-1, dp(CONTROL_HEIGHT)).apply { bottomMargin = dp(GAP) })
+            quickApps.addView(shortcut, LinearLayout.LayoutParams(-1, dp(CONTROL_HEIGHT)).apply { bottomMargin = dp(GAP) })
         }
-        rail.addView(View(this), LinearLayout.LayoutParams(1, 0, 1f))
-        railButton(R.string.original_home) { openOriginalHome() }
-        railButton(R.string.system_settings) { open(Intent(Settings.ACTION_SETTINGS)) }
-        railButton(R.string.settings) { showSettings() }
+        railButton(R.string.ts7_original_home) { openOriginalHome() }
+        railButton(R.string.ts7_system_settings) { open(Intent(Settings.ACTION_SETTINGS)) }
+        railButton(R.string.ts7_settings) { showSettings() }
     }
 
-    private fun railButton(text: Int, action: () -> Unit) {
-        rail.addView(button(text, action), LinearLayout.LayoutParams(-1, dp(CONTROL_HEIGHT)).apply { bottomMargin = dp(GAP) })
+    private fun railButton(text: Int, parent: LinearLayout = rail, action: () -> Unit) {
+        parent.addView(button(text, action), LinearLayout.LayoutParams(-1, dp(CONTROL_HEIGHT)).apply { bottomMargin = dp(GAP) })
     }
 
     private fun render(next: SessionState) {
         state = next
         status.text = getString(Ts7SessionService.phaseLabel(next.phase))
         status.setTextColor(if (next.phase == SessionPhase.CONNECTED) ACCENT else Color.WHITE)
-        local.visibility = if (next.phase == SessionPhase.CONNECTED) View.GONE else View.VISIBLE
+        local.visibility = if (next.phase == SessionPhase.CONNECTED && next.pictureAvailable) View.GONE else View.VISIBLE
+        panel.setStreamSize(next.videoWidth, next.videoHeight)
         connectButton.isEnabled = service != null && next.phase !in listOf(SessionPhase.CONNECTING, SessionPhase.WAITING_PHONE, SessionPhase.CONNECTED)
         disconnectButton.isEnabled = service != null && (next.phase in listOf(SessionPhase.CONNECTING,
             SessionPhase.WAITING_PHONE, SessionPhase.CONNECTED, SessionPhase.WAITING_NETWORK) || next.retrying)
         details.text = listOfNotNull(next.message.takeIf { it != 0 }?.let(::getString),
-            if (next.retrying) getString(R.string.state_retry) else null,
-            if (next.phase == SessionPhase.FAILED && next.attempts >= ConnectionPolicy.MAX_ATTEMPTS) getString(R.string.retry_exhausted) else null)
+            if (next.retrying) getString(R.string.ts7_state_retry) else null,
+            if (next.phase == SessionPhase.FAILED && next.attempts >= ConnectionPolicy.MAX_ATTEMPTS) getString(R.string.ts7_retry_exhausted) else null)
             .joinToString("\n")
         if (next.phase == SessionPhase.CONNECTED && resumed) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -188,12 +195,17 @@ class LauncherActivity : Activity(), SurfaceHolder.Callback {
     }
     override fun onResume() {
         super.onResume()
+        if (Build.VERSION.SDK_INT < 33 && languageAtCreate != AppLocale.preference(this)) {
+            recreate()
+            return
+        }
         resumed = true
         service?.setVisible(true)
         render(state)
     }
     override fun onPause() {
         resumed = false
+        service?.cancelDiPlayHandoff()
         service?.setVisible(false)
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         super.onPause()
@@ -238,13 +250,13 @@ class LauncherActivity : Activity(), SurfaceHolder.Callback {
         val apps = AppCatalog.list(this)
         val grid = GridLayout(this).apply { columnCount = 3; setPadding(dp(GAP), dp(GAP), dp(GAP), dp(GAP)) }
         val scroll = ScrollView(this).apply { addView(grid) }
-        val dialog = AlertDialog.Builder(this).setTitle(R.string.apps).setMessage(R.string.shortcut_hint)
-            .setView(scroll).setNegativeButton(R.string.close, null).create()
+        val dialog = AlertDialog.Builder(this).setTitle(R.string.ts7_apps).setMessage(R.string.ts7_shortcut_hint)
+            .setView(scroll).setNegativeButton(R.string.ts7_close, null).create()
         apps.forEach { app ->
             val item = button(app.label) { dialog.dismiss(); launch(app.component) }
             item.setOnLongClickListener {
-                AlertDialog.Builder(this).setTitle(R.string.choose_shortcut)
-                    .setItems(arrayOf(getString(R.string.shortcut_slot, 1), getString(R.string.shortcut_slot, 2))) { _, slot ->
+                AlertDialog.Builder(this).setTitle(R.string.ts7_choose_shortcut)
+                    .setItems(arrayOf(getString(R.string.ts7_shortcut_slot, 1), getString(R.string.ts7_shortcut_slot, 2))) { _, slot ->
                         store.saveShortcut(slot, app.component.flattenToString()); refreshRail()
                     }.show()
                 true
@@ -254,18 +266,18 @@ class LauncherActivity : Activity(), SurfaceHolder.Callback {
                 setMargins(dp(4), dp(4), dp(4), dp(4))
             })
         }
-        if (apps.isEmpty()) grid.addView(label(getString(R.string.no_apps), 18f))
+        if (apps.isEmpty()) grid.addView(label(getString(R.string.ts7_no_apps), 18f))
         dialog.show()
     }
 
     private fun chooseApp(home: Boolean = false, slot: Int? = null) {
         val apps = AppCatalog.list(this, home)
-        AlertDialog.Builder(this).setTitle(if (home) R.string.choose_home else R.string.choose_shortcut)
+        AlertDialog.Builder(this).setTitle(if (home) R.string.ts7_choose_home else R.string.ts7_choose_shortcut)
             .setItems(apps.map { it.label }.toTypedArray()) { _, index ->
                 val component = apps[index].component.flattenToString()
                 if (home) store.originalHome = component else slot?.let { store.saveShortcut(it, component) }
                 refreshRail()
-            }.setNegativeButton(R.string.cancel, null).show()
+            }.setNegativeButton(R.string.ts7_cancel, null).show()
     }
     private fun openOriginalHome() {
         val saved = store.originalHome?.let(ComponentName::unflattenFromString)
@@ -279,12 +291,13 @@ class LauncherActivity : Activity(), SurfaceHolder.Callback {
     }
     private fun open(intent: Intent) {
         try { startActivity(intent) }
-        catch (_: ActivityNotFoundException) { toast(R.string.app_unavailable) }
-        catch (_: SecurityException) { toast(R.string.app_unavailable) }
+        catch (_: ActivityNotFoundException) { toast(R.string.ts7_app_unavailable) }
+        catch (_: SecurityException) { toast(R.string.ts7_app_unavailable) }
     }
 
     private fun showSettings() {
         if (settingsDialog != null) return
+        if (store.diPlayMode) { showDesktopSettings(); return }
         editing = true
         service?.beginEditing()
         val content = LinearLayout(this).apply {
@@ -298,51 +311,52 @@ class LauncherActivity : Activity(), SurfaceHolder.Callback {
             text = getString(title); textSize = 17f; isChecked = value; minHeight = dp(CONTROL_HEIGHT)
             content.addView(this, LinearLayout.LayoutParams(-1, -2))
         }
-        section(R.string.connection)
-        note(R.string.connection_help)
-        val ssid = EditText(this).apply { hint = getString(R.string.ssid); setSingleLine(); setText(store.ssid) }
+        row(R.string.ts7_diplay_settings) { openDiPlay("settings") }
+        section(R.string.ts7_connection)
+        note(R.string.ts7_connection_help)
+        val ssid = EditText(this).apply { hint = getString(R.string.ts7_ssid); setSingleLine(); setText(store.ssid) }
         val password = EditText(this).apply {
-            hint = getString(R.string.password); inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            hint = getString(R.string.ts7_password); inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             setSingleLine(); setText(store.password); setSaveEnabled(false)
         }
         content.addView(ssid); content.addView(password)
         var phone = store.phone
-        val phoneButton = button(if (phone == null) R.string.choose_phone else R.string.phone_selected) {}
+        val phoneButton = button(if (phone == null) R.string.ts7_choose_phone else R.string.ts7_phone_selected) {}
         phoneButton.setOnClickListener {
             if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 requestConnectionPermissions(); return@setOnClickListener
             }
             val paired = getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter?.bondedDevices.orEmpty()
                 .sortedBy { it.name ?: it.address }
-            if (paired.isEmpty()) toast(R.string.no_phones)
-            else AlertDialog.Builder(this).setTitle(R.string.choose_phone)
-                .setItems(paired.map { it.name ?: getString(R.string.choose_phone) }.toTypedArray()) { _, which ->
+            if (paired.isEmpty()) toast(R.string.ts7_no_phones)
+            else AlertDialog.Builder(this).setTitle(R.string.ts7_choose_phone)
+                .setItems(paired.map { it.name ?: getString(R.string.ts7_choose_phone) }.toTypedArray()) { _, which ->
                     phone = paired[which].address
-                    phoneButton.setText(R.string.phone_selected)
+                    phoneButton.setText(R.string.ts7_phone_selected)
                 }.show()
         }
         content.addView(phoneButton, LinearLayout.LayoutParams(-1, dp(CONTROL_HEIGHT)))
-        row(R.string.wifi_settings) { open(Intent(Settings.ACTION_WIFI_SETTINGS)) }
-        row(R.string.bluetooth_settings) { open(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
-        note(R.string.permission_help)
-        row(R.string.permissions) { requestConnectionPermissions() }
-        section(R.string.display); note(R.string.display_info)
-        section(R.string.audio)
-        val audio = toggle(R.string.audio_focus, store.audioFocus)
-        val microphone = toggle(R.string.microphone, store.microphone)
-        note(R.string.audio_help)
-        section(R.string.startup)
-        val auto = toggle(R.string.auto_connect, store.autoConnect)
-        val wake = toggle(R.string.resume_connect, store.resumeConnect)
-        note(R.string.resume_help)
-        row(R.string.choose_home) { chooseApp(home = true) }
-        row(R.string.default_home) { open(Intent(Settings.ACTION_HOME_SETTINGS)) }
-        section(R.string.diagnostics)
-        row(R.string.export_report) { exportReport() }
-        val dialog = AlertDialog.Builder(this).setTitle(R.string.settings)
+        row(R.string.ts7_wifi_settings) { open(Intent(Settings.ACTION_WIFI_SETTINGS)) }
+        row(R.string.ts7_bluetooth_settings) { open(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
+        note(R.string.ts7_permission_help)
+        row(R.string.ts7_permissions) { requestConnectionPermissions() }
+        section(R.string.ts7_display); note(R.string.ts7_display_info)
+        section(R.string.ts7_audio)
+        val audio = toggle(R.string.ts7_audio_focus, store.audioFocus)
+        val microphone = toggle(R.string.ts7_microphone, store.microphone)
+        note(R.string.ts7_audio_help)
+        section(R.string.ts7_startup)
+        val auto = toggle(R.string.ts7_auto_connect, store.autoConnect)
+        val wake = toggle(R.string.ts7_resume_connect, store.resumeConnect)
+        note(R.string.ts7_resume_help)
+        row(R.string.ts7_choose_home) { chooseApp(home = true) }
+        row(R.string.ts7_default_home) { open(Intent(Settings.ACTION_HOME_SETTINGS)) }
+        section(R.string.ts7_diagnostics)
+        row(R.string.ts7_export_report) { exportReport() }
+        val dialog = AlertDialog.Builder(this).setTitle(R.string.ts7_settings)
             .setView(ScrollView(this).apply { addView(content) })
-            .setPositiveButton(R.string.save, null).setNeutralButton(R.string.apply_reconnect, null)
-            .setNegativeButton(R.string.cancel, null).create()
+            .setPositiveButton(R.string.ts7_save, null).setNeutralButton(R.string.ts7_apply_reconnect, null)
+            .setNegativeButton(R.string.ts7_cancel, null).create()
         settingsDialog = dialog
         dialog.setOnDismissListener {
             settingsDialog = null
@@ -353,9 +367,9 @@ class LauncherActivity : Activity(), SurfaceHolder.Callback {
             fun save(reconnect: Boolean) {
                 val connectionRequired = reconnect || auto.isChecked
                 if (connectionRequired && ManualHotspotValidation.error(ssid.text.toString(), password.text.toString()) != null) {
-                    ssid.error = getString(R.string.invalid_network); return
+                    ssid.error = getString(R.string.ts7_invalid_network); return
                 }
-                if (connectionRequired && phone == null) { toast(R.string.choose_phone_first); return }
+                if (connectionRequired && phone == null) { toast(R.string.ts7_choose_phone_first); return }
                 val previousAuto = store.autoConnect
                 store.ssid = ssid.text.toString(); store.password = password.text.toString(); store.phone = phone
                 store.audioFocus = audio.isChecked; store.microphone = microphone.isChecked
@@ -371,13 +385,46 @@ class LauncherActivity : Activity(), SurfaceHolder.Callback {
         dialog.show()
     }
 
+    private fun openDiPlay(page: String = "home") {
+        val session = service ?: return
+        settingsDialog?.dismiss()
+        session.prepareDiPlay { ready ->
+            if (!resumed || isFinishing || isDestroyed) return@prepareDiPlay
+            if (!ready) { toast(R.string.ts7_failure_cleanup); return@prepareDiPlay }
+            DiPlayLauncherIntegration.importDesktopConnection(this, store.ssid, store.password,
+                store.phone, store.audioFocus)
+            open(DiPlayLauncherIntegration.pageIntent(this, page))
+        }
+    }
+
+    private fun showDesktopSettings() {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(GAP * 2), dp(GAP), dp(GAP * 2), dp(GAP))
+        }
+        content.addView(label(getString(R.string.ts7_diplay_settings_help), 16f, MUTED))
+        fun row(title: Int, action: () -> Unit) {
+            content.addView(button(title, action), LinearLayout.LayoutParams(-1, dp(CONTROL_HEIGHT)))
+        }
+        row(R.string.ts7_diplay_settings) { openDiPlay("settings") }
+        row(R.string.ts7_choose_home) { chooseApp(home = true) }
+        row(R.string.ts7_default_home) { open(Intent(Settings.ACTION_HOME_SETTINGS)) }
+        row(R.string.ts7_export_report) { exportReport() }
+        val dialog = AlertDialog.Builder(this).setTitle(R.string.ts7_settings)
+            .setView(ScrollView(this).apply { addView(content) })
+            .setNegativeButton(R.string.ts7_close, null).create()
+        settingsDialog = dialog
+        dialog.setOnDismissListener { settingsDialog = null }
+        dialog.show()
+    }
+
     private fun requestConnectionPermissions() {
         val permissions = LauncherStore.missingPermissions(this, true).toMutableList()
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
         if (permissions.isNotEmpty()) requestPermissions(permissions.toTypedArray(), PERMISSIONS_REQUEST)
-        else toast(R.string.permissions_ready)
+        else toast(R.string.ts7_permissions_ready)
     }
 
     private fun exportReport() {
@@ -385,7 +432,7 @@ class LauncherActivity : Activity(), SurfaceHolder.Callback {
         try {
             startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
                 .setType("text/plain").putExtra(Intent.EXTRA_TITLE, "ts7-diagnostics.txt"), REPORT_REQUEST)
-        } catch (_: ActivityNotFoundException) { toast(R.string.report_failed) }
+        } catch (_: ActivityNotFoundException) { toast(R.string.ts7_report_failed) }
     }
 
     @Deprecated("Platform Activity result API is supported from API 25")
@@ -398,7 +445,7 @@ class LauncherActivity : Activity(), SurfaceHolder.Callback {
             checkNotNull(contentResolver.openOutputStream(uri, "wt")).bufferedWriter().use { it.write(report) }
         }.isSuccess
         pendingReport = null
-        toast(if (saved) R.string.report_saved else R.string.report_failed)
+        toast(if (saved) R.string.ts7_report_saved else R.string.ts7_report_failed)
     }
 
     private fun label(text: String, size: Float, color: Int = Color.WHITE) = TextView(this).apply {

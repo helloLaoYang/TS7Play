@@ -12,8 +12,8 @@ android {
         applicationId = "com.hilllaoya.ts7play"
         minSdk = 25
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
     }
     authenticationAssets?.let { sourceSets.getByName("main").assets.directories.add(it.absolutePath) }
     compileOptions {
@@ -25,8 +25,9 @@ android {
 }
 
 dependencies {
-    implementation(project(":shared"))
+    implementation(project(":common"))
     testImplementation(libs.junit)
+    testImplementation(libs.androidx.activity)
     testImplementation("org.robolectric:robolectric:4.17")
 }
 

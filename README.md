@@ -1,17 +1,19 @@
 # TS7Play
 
-An Android HOME launcher and same-LAN CarPlay receiver for TOPWAY TS7, built on
+An Android HOME launcher with the original DiPlay interface and receiver built
+into the same APK for TOPWAY TS7, based on
 DiPlay commit `615b32ce0b40cd0b99ce94ba23a512001553684f`.
 
 - Application module: `:ts7`.
 - Application ID: `com.hilllaoya.ts7play`.
 - Minimum Android version: 7.1 (API 25).
-- Fixed main-screen Surface, service-owned sessions, bounded reconnects, local
-  apps, original-launcher recovery, settings and redacted diagnostic exports.
+- Version 0.2.0: Simplified Chinese by default, built-in DiPlay connection and
+  settings pages, a main-screen Surface, exclusive receiver handoff, local apps,
+  original-launcher recovery and diagnostic exports.
 
-[Implementation and installation](docs/TS7_IMPLEMENTATION.md) ·
-[Validation and remaining device checks](docs/TS7_VALIDATION.md) ·
-[Download the source-only test APK](https://ai.lipeachr.com/diplay/TS7Play-0.1.0-source-only-8c607e88.apk)
+[Current implementation and installation](docs/TS7_0.2.0.md) ·
+[Initial validation and device checklist](docs/TS7_VALIDATION.md) ·
+[Download the source-only test APK](https://ai.lipeachr.com/diplay/TS7Play.apk)
 
 ```sh
 ./gradlew :ts7:testDebugUnitTest :ts7:lintDebug :ts7:assembleDebug

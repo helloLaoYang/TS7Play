@@ -16,12 +16,22 @@
             <category android:name="android.intent.category.HOME" />
         </intent>
     </queries>
-    <application android:allowBackup="false" android:fullBackupContent="false"
-        android:dataExtractionRules="@xml/data_extraction_rules" android:label="@string/app_name"
+    <application android:name=".Ts7Application" android:allowBackup="false" android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules" android:label="@string/ts7_app_name"
         android:icon="@drawable/ic_ts7" android:theme="@style/Ts7Theme"
         android:supportsRtl="true" android:enableOnBackInvokedCallback="false">
         <service android:name="com.shilapi.xcertplay.shared.MyCarAppService" tools:node="remove" />
         <meta-data android:name="androidx.car.app.minCarApiLevel" tools:node="remove" />
+        <activity android:name="com.shilapi.xcertplay.DiPlayActivity"
+            android:exported="false" tools:replace="android:exported">
+            <intent-filter tools:node="removeAll" />
+        </activity>
+        <receiver android:name="com.shilapi.xcertplay.PhoneBluetoothReceiver"
+            android:enabled="true" android:exported="true">
+            <intent-filter>
+                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+            </intent-filter>
+        </receiver>
         <activity android:name=".LauncherActivity" android:exported="true"
             android:launchMode="singleTask" android:screenOrientation="landscape"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|uiMode">

@@ -26,6 +26,8 @@ import android.view.MotionEvent
 import android.view.Surface
 import com.diplay.ts7.SessionDiagnostics.Event
 import com.shilapi.xcertplay.airplay.AirPlaySession
+import com.shilapi.xcertplay.AppLocale
+import com.shilapi.xcertplay.DiPlayLauncherIntegration
 import com.shilapi.xcertplay.airplay.AirPlaySessionListener
 import com.shilapi.xcertplay.media.CarPlayTouchMapper
 import com.shilapi.xcertplay.orchestration.CarPlayStatus
@@ -36,7 +38,9 @@ import java.util.concurrent.Executors
 
 internal enum class SessionPhase { IDLE, WAITING_NETWORK, WAITING_PHONE, CONNECTING, CONNECTED, FAILED, DISCONNECTED }
 internal data class SessionState(val phase: SessionPhase = SessionPhase.IDLE,
-    val message: Int = 0, val attempts: Int = 0, val retrying: Boolean = false)
+    val message: Int = 0, val attempts: Int = 0, val retrying: Boolean = false,
+    val pictureAvailable: Boolean = true, val videoWidth: Int = ReceiverEngine.WIDTH,
+    val videoHeight: Int = ReceiverEngine.HEIGHT)
 
 /** Owns connection, media and callbacks independently of any Activity or Surface. */
 class Ts7SessionService : Service() {
@@ -49,6 +53,8 @@ class Ts7SessionService : Service() {
     private lateinit var connectivity: ConnectivityManager
     private val observers = mutableSetOf<(SessionState) -> Unit>()
     private var engine: ReceiverEngine? = null
+    private var borrowedProjection: DiPlayLauncherIntegration.Projection? = null
+    private var handoff: ((Boolean) -> Unit)? = null
     private var surface: Surface? = null
     private var generation = 0
     private var busy = false
@@ -63,13 +69,22 @@ class Ts7SessionService : Service() {
     private var registeredNetwork = false
     private var registeredScreen = false
     private val retry = Runnable { pump() }
-    private val timeout = Runnable { fail(R.string.failure_timeout, true, Event.ATTEMPT_TIMEOUT) }
-    private val pictureTimeout = Runnable { fail(R.string.failure_picture, true, Event.ATTEMPT_TIMEOUT) }
+    private val timeout = Runnable { fail(R.string.ts7_failure_timeout, true, Event.ATTEMPT_TIMEOUT) }
+    private val pictureTimeout = Runnable { fail(R.string.ts7_failure_picture, true, Event.ATTEMPT_TIMEOUT) }
     private val stable = Runnable {
         policy.stable()
         store.saveBudget(policy.attempts, 0)
     }
     private val networkCheck = Runnable { checkNetwork() }
+    private val diPlayPoll = object : Runnable {
+        override fun run() {
+            if (!visible || destroyed) return
+            refreshDiPlay()
+            main.postDelayed(this, 500)
+        }
+    }
+
+    override fun attachBaseContext(newBase: Context) = super.attachBaseContext(AppLocale.wrap(newBase))
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) = changed()
@@ -131,10 +146,63 @@ class Ts7SessionService : Service() {
     internal fun removeObserver(observer: (SessionState) -> Unit) { observers.remove(observer) }
     internal fun setVisible(value: Boolean) {
         visible = value
+        main.removeCallbacks(diPlayPoll)
         if (value) {
+            refreshDiPlay()
+            main.post(diPlayPoll)
             automaticStart()
             pump()
         } else releaseTouches()
+    }
+
+    internal fun prepareDiPlay(completion: (Boolean) -> Unit) {
+        handoff = completion
+        store.diPlayMode = true
+        store.autoConnect = false
+        store.connectionPending = false
+        store.autoConsumed = true
+        policy.disconnect()
+        stopEngine()
+        finishHandoff()
+    }
+
+    internal fun cancelDiPlayHandoff() { handoff = null }
+
+    private fun finishHandoff() {
+        if (busy) return
+        val callback = handoff ?: return
+        handoff = null
+        if (!cleanupBlocked) store.suppressed = false
+        callback(!cleanupBlocked)
+    }
+
+    private fun refreshDiPlay() {
+        if (!store.diPlayMode && !DiPlayLauncherIntegration.hasSession()) return
+        if (engine != null || busy) return
+        store.diPlayMode = true
+        val next = DiPlayLauncherIntegration.projection()
+        if (borrowedProjection?.sameReceiver(next) != true) {
+            surface?.let { borrowedProjection?.detach(it) }
+            borrowedProjection = next
+            surface?.takeIf { it.isValid }?.let { next?.attach(it) }
+        }
+        val active = next?.active == true
+        if (active) store.suppressed = false
+        val phase = when {
+            active -> SessionPhase.CONNECTED
+            DiPlayLauncherIntegration.hasSession() -> SessionPhase.CONNECTING
+            store.suppressed -> SessionPhase.DISCONNECTED
+            else -> SessionPhase.IDLE
+        }
+        val snapshot = SessionState(phase,
+            message = if (active && next?.embeddable != true) R.string.ts7_diplay_open_projection else 0,
+            pictureAvailable = next?.embeddable == true,
+            videoWidth = next?.width ?: ReceiverEngine.WIDTH,
+            videoHeight = next?.height ?: ReceiverEngine.HEIGHT)
+        if (state != snapshot) {
+            state = snapshot
+            observers.toList().forEach { it(state) }
+        }
     }
     internal fun beginEditing() {
         policy.editing = true
@@ -168,6 +236,7 @@ class Ts7SessionService : Service() {
     }
 
     internal fun connect() {
+        if (store.diPlayMode || DiPlayLauncherIntegration.hasSession()) return
         if (policy.active) return
         store.suppressed = false
         store.autoConsumed = true
@@ -190,12 +259,18 @@ class Ts7SessionService : Service() {
         store.autoConsumed = true
         policy.disconnect()
         diagnostics.record(Event.USER_DISCONNECTED)
+        if (store.diPlayMode) {
+            surface?.let { borrowedProjection?.detach(it) }
+            borrowedProjection = null
+            DiPlayLauncherIntegration.stop { main.post { if (!destroyed) refreshDiPlay() } }
+        }
         stopEngine()
         publish(SessionPhase.DISCONNECTED)
         finishIdleService()
     }
 
     private fun automaticStart() {
+        if (store.diPlayMode) return
         if (!visible && !foreground) return
         if (store.autoConnect && !store.suppressed && !policy.editing &&
             (!store.autoConsumed || store.connectionPending) && !policy.desired && !policy.active) {
@@ -203,12 +278,13 @@ class Ts7SessionService : Service() {
             else policy.request()
             store.autoConsumed = true
             store.connectionPending = policy.desired
-            if (!policy.desired) publish(SessionPhase.FAILED, R.string.retry_exhausted)
+            if (!policy.desired) publish(SessionPhase.FAILED, R.string.ts7_retry_exhausted)
         }
     }
 
     private fun pump() {
         main.removeCallbacks(retry)
+        if (store.diPlayMode) return
         if (destroyed || cleanupBlocked || busy || policy.editing || !policy.desired || policy.active) return
         if (!foreground && !visible) return
         if (networkSignature.isEmpty()) {
@@ -222,21 +298,25 @@ class Ts7SessionService : Service() {
         }
         if (!policy.canStart(true, now)) return
         val problem = when {
-            ManualHotspotValidation.error(store.ssid, store.password) != null -> R.string.invalid_network
-            store.phone.isNullOrEmpty() -> R.string.choose_phone_first
-            LauncherStore.missingPermissions(this, store.microphone).isNotEmpty() -> R.string.permission_missing
-            getSystemService(BluetoothManager::class.java)?.adapter?.isEnabled != true -> R.string.bluetooth_off
+            ManualHotspotValidation.error(store.ssid, store.password) != null -> R.string.ts7_invalid_network
+            store.phone.isNullOrEmpty() -> R.string.ts7_choose_phone_first
+            LauncherStore.missingPermissions(this, store.microphone).isNotEmpty() -> R.string.ts7_permission_missing
+            getSystemService(BluetoothManager::class.java)?.adapter?.isEnabled != true -> R.string.ts7_bluetooth_off
             else -> 0
         }
         if (problem != 0) {
-            fail(problem, false, if (problem == R.string.permission_missing) Event.PERMISSION_MISSING else Event.CONFIGURATION_ERROR)
+            fail(problem, false, if (problem == R.string.ts7_permission_missing) Event.PERMISSION_MISSING else Event.CONFIGURATION_ERROR)
+            return
+        }
+        if (!DiPlayLauncherIntegration.reserveDesktop(this)) {
+            fail(R.string.ts7_receiver_busy, false, Event.START_REJECTED)
             return
         }
         try {
             startService(Intent(this, Ts7SessionService::class.java))
             showForeground()
         } catch (_: RuntimeException) {
-            fail(R.string.failure_start, false, Event.START_REJECTED)
+            fail(R.string.ts7_failure_start, false, Event.START_REJECTED)
             return
         }
         policy.started()
@@ -262,13 +342,13 @@ class Ts7SessionService : Service() {
                     busy = false
                     if (next == null) {
                         if (result.exceptionOrNull() is AuthenticationUnavailableException)
-                            fail(R.string.auth_missing, false, Event.AUTHENTICATION_UNAVAILABLE)
-                        else fail(R.string.failure_start, false, Event.START_REJECTED)
+                            fail(R.string.ts7_auth_missing, false, Event.AUTHENTICATION_UNAVAILABLE)
+                        else fail(R.string.ts7_failure_start, false, Event.START_REJECTED)
                     } else {
                         engine = next
                         surface?.takeIf { it.isValid }?.let(next::attach)
                         try { next.controller.start() }
-                        catch (_: RuntimeException) { fail(R.string.failure_start, false, Event.START_REJECTED) }
+                        catch (_: RuntimeException) { fail(R.string.ts7_failure_start, false, Event.START_REJECTED) }
                     }
                 }
             }
@@ -295,11 +375,11 @@ class Ts7SessionService : Service() {
             }
         }
         override fun onSessionEnded(session: AirPlaySession) = current {
-            fail(R.string.failure_transport, true, Event.SESSION_ENDED)
+            fail(R.string.ts7_failure_transport, true, Event.SESSION_ENDED)
         }
         override fun onTransportError(message: String) = current {
             // Upstream free-text messages can contain network or phone identifiers.
-            fail(R.string.failure_transport, true, Event.TRANSPORT_ERROR)
+            fail(R.string.ts7_failure_transport, true, Event.TRANSPORT_ERROR)
         }
     }
 
@@ -309,12 +389,12 @@ class Ts7SessionService : Service() {
                 val pairingError = status.knownCause in setOf(ConnectionFailureCause.CHOSEN_IPHONE_NOT_PAIRED,
                     ConnectionFailureCause.NO_PAIRED_IPHONE, ConnectionFailureCause.IPHONE_NOT_CHOSEN)
                 val message = when {
-                    pairingError -> R.string.choose_phone_first
-                    status.wifiResetRequired -> R.string.failure_wifi_reset
-                    status.startupFailure == WirelessStartupFailure.BLUETOOTH_UNUSABLE -> R.string.failure_bluetooth
-                    status.startupFailure == WirelessStartupFailure.FIRST_TCP_TIMEOUT -> R.string.failure_timeout
-                    status.startupFailure?.retryable == false -> R.string.failure_configuration
-                    else -> R.string.failure_transport
+                    pairingError -> R.string.ts7_choose_phone_first
+                    status.wifiResetRequired -> R.string.ts7_failure_wifi_reset
+                    status.startupFailure == WirelessStartupFailure.BLUETOOTH_UNUSABLE -> R.string.ts7_failure_bluetooth
+                    status.startupFailure == WirelessStartupFailure.FIRST_TCP_TIMEOUT -> R.string.ts7_failure_timeout
+                    status.startupFailure?.retryable == false -> R.string.ts7_failure_configuration
+                    else -> R.string.ts7_failure_transport
                 }
                 fail(message, !pairingError && status.startupFailure?.retryable != false && !status.wifiResetRequired,
                     if (pairingError) Event.CONFIGURATION_ERROR else Event.TRANSPORT_ERROR)
@@ -325,8 +405,8 @@ class Ts7SessionService : Service() {
                     publish(SessionPhase.WAITING_PHONE)
                 }
             }
-            CarPlayStatus.ControlEnded -> fail(R.string.failure_transport, true, Event.SESSION_ENDED)
-            CarPlayStatus.WaitingForMfi -> fail(R.string.auth_missing, false, Event.AUTHENTICATION_UNAVAILABLE)
+            CarPlayStatus.ControlEnded -> fail(R.string.ts7_failure_transport, true, Event.SESSION_ENDED)
+            CarPlayStatus.WaitingForMfi -> fail(R.string.ts7_auth_missing, false, Event.AUTHENTICATION_UNAVAILABLE)
             else -> if (state.phase != SessionPhase.CONNECTED) publish(SessionPhase.CONNECTING)
         }
     }
@@ -360,27 +440,34 @@ class Ts7SessionService : Service() {
                 val stopped = runCatching { previous.close() }.getOrDefault(false)
                 main.post { cleanupFinished(stopped) }
             }
+        } else if (!busy && !cleanupBlocked) {
+            DiPlayLauncherIntegration.releaseDesktop(this)
         }
     }
 
     private fun cleanupFinished(stopped: Boolean) {
         busy = false
+        if (stopped) DiPlayLauncherIntegration.releaseDesktop(this)
         if (!stopped) {
             cleanupBlocked = true
             policy.failed(false, SystemClock.elapsedRealtime())
             store.connectionPending = false
             diagnostics.record(Event.CLEANUP_TIMEOUT)
-            publish(SessionPhase.FAILED, R.string.failure_cleanup)
+            publish(SessionPhase.FAILED, R.string.ts7_failure_cleanup)
         }
         if (destroyed) lifecycleWorker.shutdown()
-        else { pump(); finishIdleService() }
+        else { finishHandoff(); pump(); finishIdleService() }
     }
 
     internal fun attachSurface(next: Surface) {
         surface = next
         if (next.isValid) {
+            if (store.diPlayMode) {
+                refreshDiPlay()
+                borrowedProjection?.attach(next)
+            }
             engine?.attach(next)
-            if (state.phase == SessionPhase.CONNECTED && !firstFrame) {
+            if (!store.diPlayMode && state.phase == SessionPhase.CONNECTED && !firstFrame) {
                 main.removeCallbacks(pictureTimeout)
                 main.postDelayed(pictureTimeout, 15_000)
             }
@@ -393,15 +480,27 @@ class Ts7SessionService : Service() {
         surface = null
         // A hidden launcher cannot produce its first visible frame; resume this check on return.
         main.removeCallbacks(pictureTimeout)
+        val borrowedDetached = borrowedProjection?.detach(previous) != false
+        borrowedProjection = null
+        if (!borrowedDetached) {
+            diagnostics.record(Event.SURFACE_TIMEOUT)
+            store.suppressed = true
+            DiPlayLauncherIntegration.stop {}
+            publish(SessionPhase.FAILED, R.string.ts7_failure_cleanup)
+        }
         if (engine?.detach(previous) == false) {
             diagnostics.record(Event.SURFACE_TIMEOUT)
-            fail(R.string.failure_cleanup, false, Event.SURFACE_TIMEOUT)
+            fail(R.string.ts7_failure_cleanup, false, Event.SURFACE_TIMEOUT)
         }
         diagnostics.record(Event.SURFACE_DETACHED)
     }
     internal fun touch(event: MotionEvent, width: Int, height: Int): Boolean =
-        engine?.controller?.sendTouch(CarPlayTouchMapper.contacts(event, width, height)) == true
-    internal fun releaseTouches() { engine?.controller?.sendTouch(emptyList()) }
+        if (store.diPlayMode) borrowedProjection?.touch(event, width, height) == true
+        else engine?.controller?.sendTouch(CarPlayTouchMapper.contacts(event, width, height)) == true
+    internal fun releaseTouches() {
+        engine?.controller?.sendTouch(emptyList())
+        borrowedProjection?.releaseTouches()
+    }
     internal fun report() = diagnostics.report(state)
 
     private fun currentNetworkSignature(): String = connectivity.allNetworks.mapNotNull { network ->
@@ -419,7 +518,7 @@ class Ts7SessionService : Service() {
         if (next == networkSignature) return
         networkSignature = next
         diagnostics.record(Event.NETWORK_CHANGED)
-        if (policy.active) fail(R.string.failure_network, true, Event.NETWORK_CHANGED)
+        if (policy.active) fail(R.string.ts7_failure_network, true, Event.NETWORK_CHANGED)
         if (next.isEmpty() && policy.desired) {
             diagnostics.record(Event.WAITING_NETWORK)
             publish(SessionPhase.WAITING_NETWORK)
@@ -440,14 +539,14 @@ class Ts7SessionService : Service() {
         val open = PendingIntent.getActivity(this, 0, Intent(this, LauncherActivity::class.java), flags)
         val stop = PendingIntent.getService(this, 1,
             Intent(this, Ts7SessionService::class.java).setAction(ACTION_DISCONNECT), flags)
-        return builder.setSmallIcon(R.drawable.ic_ts7).setContentTitle(getString(R.string.app_name))
+        return builder.setSmallIcon(R.drawable.ic_ts7).setContentTitle(getString(R.string.ts7_app_name))
             .setContentText(getString(phaseLabel(state.phase))).setContentIntent(open).setOngoing(true)
-            .addAction(Notification.Action.Builder(null, getString(R.string.disconnect), stop).build()).build()
+            .addAction(Notification.Action.Builder(null, getString(R.string.ts7_disconnect), stop).build()).build()
     }
 
     private fun showForeground() {
         if (Build.VERSION.SDK_INT >= 26) getSystemService(NotificationManager::class.java)
-            .createNotificationChannel(NotificationChannel(CHANNEL, getString(R.string.notification_channel), NotificationManager.IMPORTANCE_LOW))
+            .createNotificationChannel(NotificationChannel(CHANNEL, getString(R.string.ts7_notification_channel), NotificationManager.IMPORTANCE_LOW))
         if (Build.VERSION.SDK_INT >= 29) {
             var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
             if (Build.VERSION.SDK_INT >= 30 && store.microphone) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
@@ -465,6 +564,9 @@ class Ts7SessionService : Service() {
 
     override fun onDestroy() {
         destroyed = true
+        handoff = null
+        surface?.let { borrowedProjection?.detach(it) }
+        borrowedProjection = null
         observers.clear()
         policy.disconnect()
         if (registeredNetwork) connectivity.unregisterNetworkCallback(networkCallback)
@@ -480,13 +582,13 @@ class Ts7SessionService : Service() {
         private const val NOTIFICATION = 701
         private const val ACTION_DISCONNECT = "com.diplay.ts7.DISCONNECT"
         internal fun phaseLabel(phase: SessionPhase): Int = when (phase) {
-            SessionPhase.IDLE -> R.string.state_idle
-            SessionPhase.WAITING_NETWORK -> R.string.state_network
-            SessionPhase.WAITING_PHONE -> R.string.state_phone
-            SessionPhase.CONNECTING -> R.string.state_connecting
-            SessionPhase.CONNECTED -> R.string.state_connected
-            SessionPhase.FAILED -> R.string.state_failed
-            SessionPhase.DISCONNECTED -> R.string.state_disconnected
+            SessionPhase.IDLE -> R.string.ts7_state_idle
+            SessionPhase.WAITING_NETWORK -> R.string.ts7_state_network
+            SessionPhase.WAITING_PHONE -> R.string.ts7_state_phone
+            SessionPhase.CONNECTING -> R.string.ts7_state_connecting
+            SessionPhase.CONNECTED -> R.string.ts7_state_connected
+            SessionPhase.FAILED -> R.string.ts7_state_failed
+            SessionPhase.DISCONNECTED -> R.string.ts7_state_disconnected
         }
     }
 }

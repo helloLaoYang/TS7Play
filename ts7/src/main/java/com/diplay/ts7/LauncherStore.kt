@@ -30,6 +30,9 @@ internal class LauncherStore(private val context: Context) {
     var resumeConnect: Boolean
         get() = prefs.getBoolean("resume_connect", false)
         set(value) { prefs.edit().putBoolean("resume_connect", value).apply() }
+    var diPlayMode: Boolean
+        get() = prefs.getBoolean("diplay_mode", false)
+        set(value) { prefs.edit().putBoolean("diplay_mode", value).apply() }
     var microphone: Boolean
         get() = prefs.getBoolean("microphone", true)
         set(value) { prefs.edit().putBoolean("microphone", value).apply() }

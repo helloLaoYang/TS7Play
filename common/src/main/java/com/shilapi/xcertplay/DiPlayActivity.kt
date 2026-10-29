@@ -2508,10 +2508,12 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
         settingsPageTitle(content, getString(R.string.about_diplay), getString(R.string.carplay_at_home_in_your_car))
         section(content, getString(R.string.about_public_preview_prefix, version())) { card ->
             card.addView(label(getString(R.string.an_independent_carplay_receiver_for_android_head_units_wir), 17, TEXT))
-            card.addView(updateRow())
-            toggle(card, getString(R.string.settings_background_update_checks),
-                getString(R.string.settings_background_update_checks_description),
-                UpdateAvailability.backgroundChecksEnabled(this)) { UpdateAvailability.saveBackgroundChecksEnabled(this, it) }
+            if (!DiPlayLauncherIntegration.embedded) {
+                card.addView(updateRow())
+                toggle(card, getString(R.string.settings_background_update_checks),
+                    getString(R.string.settings_background_update_checks_description),
+                    UpdateAvailability.backgroundChecksEnabled(this)) { UpdateAvailability.saveBackgroundChecksEnabled(this, it) }
+            }
         }
         section(content, getString(R.string.backup_title)) { card ->
             card.addView(button(getString(R.string.backup_open), false) { openBackup() }, matchButton(0, 60))
@@ -2704,6 +2706,7 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
     }
 
     private fun scheduleBackgroundUpdateChecks() {
+        if (DiPlayLauncherIntegration.embedded) return
         runCatching { BackgroundUpdateScheduler.schedule(applicationContext) }
             .onFailure { Log.i("DiPlay-Update", "background update scheduling unavailable", it) }
     }
@@ -4809,7 +4812,7 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
                 onVehicleDataSettingChanged(it)
             }
         }
-        if (capabilities == null || capabilities.gearSupported) {
+        if (!DiPlayLauncherIntegration.embedded && (capabilities == null || capabilities.gearSupported)) {
             toggle(card, getString(R.string.video_while_parked),
                 getString(R.string.video_while_parked_description),
                 BydOutputSettings.videoWhileParked(this), enabled = !adbSwitchChangePending) {
