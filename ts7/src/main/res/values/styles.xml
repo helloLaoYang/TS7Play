@@ -1,0 +1,11 @@
+<resources>
+    <style name="Ts7Theme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#67E8C1</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">#10171F</item>
+        <item name="android:navigationBarColor">#10171F</item>
+        <item name="android:statusBarColor">#10171F</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>

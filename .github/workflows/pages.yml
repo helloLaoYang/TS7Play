@@ -1,10 +1,5 @@
 name: Publish download site
 on:
-  push:
-    branches: [main]
-    paths: ['site/**', 'scripts/build_site.py', 'scripts/download_count.py', '.github/workflows/pages.yml']
-  schedule:
-    - cron: '23 * * * *' # refresh the download count
   workflow_dispatch:
 permissions:
   contents: read
